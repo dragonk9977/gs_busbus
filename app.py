@@ -28,7 +28,8 @@ ORANGE = "#ff6b00"
 
 st.markdown("""
 <style>
-.block-container{padding-top:1rem;max-width:1200px}
+.block-container{padding-top:3.2rem;max-width:1200px}
+header[data-testid="stHeader"]{display:none}
 [data-testid="stToolbar"],[data-testid="stDecoration"]{display:none}
 h1{font-size:1.7rem!important;padding:.2rem 0 .6rem!important}
 .chipx{font-size:.74rem;font-weight:600;border-radius:6px;padding:1px 7px;background:rgba(128,128,128,.18);white-space:nowrap}
