@@ -12,7 +12,8 @@ import streamlit.components.v1 as components
 import bus
 
 KST = ZoneInfo("Asia/Seoul")
-st.set_page_config(page_title="퇴근길 버스 알리미", page_icon="🚌", layout="wide")
+st.set_page_config(page_title="퇴근길 버스 알리미", page_icon="🚌", layout="wide",
+                   initial_sidebar_state="collapsed")
 
 # ── 경로 정의 (정류장 번호/노선명은 여기서만 수정) ─────────────────
 ROUTES = [
@@ -57,6 +58,11 @@ st.markdown("""
 st.title("🚌 퇴근길 버스 알리미")
 
 # ── 설정 ─────────────────────────────────────────
+with st.popover("⚙️ 갱신·알림 설정"):
+    refresh = st.slider("자동 갱신 주기(초)", 20, 90, 40, step=5)
+    alert_min = st.slider("승차 알림 기준(분 전)", 1, 10, 3)
+    anytime = st.checkbox(f"{WINDOW[0]}~{WINDOW[1]}시 외에도 자동 조회", value=False)
+
 cfg = []
 with st.sidebar:
     st.header("소요시간 설정(분)")
@@ -67,9 +73,6 @@ with st.sidebar:
             walk_t = st.number_input(f"{r['off']} → {r['t_ars']} 도보(250m)", 0, 15, r["walk_t"], key=f"t{i}")
             ride2 = st.number_input(f"{r['t_route']} 승차 → {r['dest']} 하차 (실시간 없을 때 대체값)", 1, 60, r["ride2"], key=f"x{i}")
         cfg.append({**r, "walk": walk, "ride": ride, "walk_t": walk_t, "ride2": ride2})
-    refresh = st.slider("자동 갱신 주기(초)", 20, 90, 40, step=5)
-    alert_min = st.slider("승차 알림 기준(분 전)", 1, 10, 3)
-    anytime = st.checkbox(f"{WINDOW[0]}~{WINDOW[1]}시 외에도 자동 조회", value=False)
 
 try:
     KEY = st.secrets["BUS_API_KEY"]
@@ -336,7 +339,9 @@ def fetch_snapshot():
 
 
 def get_snapshot():
-    if is_active() and time.time() - st.session_state.get("last_try", 0) >= refresh:
+    first_visit = "last_try" not in st.session_state       # 페이지를 처음 연 순간: 시간대와 상관없이 한 번 조회
+    stale = time.time() - st.session_state.get("last_try", 0) >= refresh
+    if first_visit or (is_active() and stale):              # 이후 자동 갱신은 퇴근 시간대에만
         fetch_snapshot()
     return st.session_state.get("snap")
 
@@ -615,8 +620,9 @@ def raw_frag():
 
 
 if not is_active():
-    st.info(f"퇴근 시간대({WINDOW[0]}~{WINDOW[1]}시, 평일) 외에는 자동 조회를 쉽니다. 지금 보려면 아래 버튼을 누르세요.")
-    if st.button("지금 한 번 조회"):
+    st.info(f"페이지를 열 때 한 번 조회했어요. 자동 갱신은 퇴근 시간대({WINDOW[0]}~{WINDOW[1]}시, 평일)에만 돼요. "
+            "최신 정보가 필요하면 아래 버튼을 누르거나 새로고침하세요.")
+    if st.button("지금 다시 조회"):
         fetch_snapshot()
 
 st.radio("내 경로 선택 (고르면 그 경로만 보여줘요)", MODES, horizontal=True, key="mode")
