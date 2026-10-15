@@ -12,16 +12,15 @@ import streamlit.components.v1 as components
 import bus
 
 KST = ZoneInfo("Asia/Seoul")
-st.set_page_config(page_title="퇴근길 버스 알리미", page_icon="🚌", layout="wide",
-                   initial_sidebar_state="collapsed")
+st.set_page_config(page_title="퇴근길 버스 알리미", page_icon="🚌", layout="wide")
 
 # ── 경로 정의 (정류장 번호/노선명은 여기서만 수정) ─────────────────
 ROUTES = [
-    dict(label="① 18810 · 27번", ars="18810", route="27", off="18643", color="#2f6fed", side="right",
+    dict(label="① 18810 · 27번", short="① 27번·독산", ars="18810", route="27", off="18643", color="#2f6fed", side="right",
          t_ars="18553", t_route="금천07", dest="18558", walk=3, ride=15, walk_t=4, ride2=10),
-    dict(label="② 18517 · 금천05", ars="18517", route="금천05", off="18643", color="#1fa971", side="left",
+    dict(label="② 18517 · 금천05", short="② 금천05·독산", ars="18517", route="금천05", off="18643", color="#1fa971", side="left",
          t_ars="18553", t_route="금천07", dest="18558", walk=3, ride=15, walk_t=4, ride2=10),
-    dict(label="③ 18500 · 금천05", ars="18500", route="금천05", off="18594", color="#8b5cf6", side="right",
+    dict(label="③ 18500 · 금천05", short="③ 금천05·가산", ars="18500", route="금천05", off="18594", color="#8b5cf6", side="right",
          t_ars="18503", t_route="금천03", dest="18530", walk=3, ride=15, walk_t=4, ride2=10),
 ]
 WINDOW = (17, 19)  # 이 시간대(시)에만 자동 조회 → API 일일 한도(1,000건) 보호
@@ -29,7 +28,14 @@ ORANGE = "#ff6b00"
 
 st.markdown("""
 <style>
-.block-container{padding-top:2.2rem;max-width:1200px}
+.block-container{padding-top:1rem;max-width:1200px}
+[data-testid="stToolbar"],[data-testid="stDecoration"]{display:none}
+h1{font-size:1.7rem!important;padding:.2rem 0 .6rem!important}
+.chipx{font-size:.74rem;font-weight:600;border-radius:6px;padding:1px 7px;background:rgba(128,128,128,.18);white-space:nowrap}
+@media (max-width:640px){
+.hero{padding:16px 16px;margin-bottom:14px}.hero .big{font-size:2.3rem}.hero .ht{font-size:1.02rem}.hero .hs{font-size:.88rem}
+.card{padding:14px 14px 8px}.card .big{font-size:1.9rem}.stp{font-size:.86rem;padding:6px 0}.stp .sub{font-size:.76rem}
+}
 .hero{background:linear-gradient(135deg,#ff8a2b,#ff5200);color:#fff;border-radius:20px;padding:20px 24px;margin:4px 0 18px;box-shadow:0 6px 18px rgba(255,82,0,.25)}
 .hero .hl{font-size:.8rem;font-weight:700;letter-spacing:.08em;opacity:.9}
 .hero .ht{font-size:1.15rem;font-weight:700;margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -57,22 +63,49 @@ st.markdown("""
 
 st.title("🚌 퇴근길 버스 알리미")
 
-# ── 설정 ─────────────────────────────────────────
-with st.popover("⚙️ 갱신·알림 설정"):
-    refresh = st.slider("자동 갱신 주기(초)", 20, 90, 40, step=5)
-    alert_min = st.slider("승차 알림 기준(분 전)", 1, 10, 3)
-    anytime = st.checkbox(f"{WINDOW[0]}~{WINDOW[1]}시 외에도 자동 조회", value=False)
+# ── 설정 (체크하면 위쪽에 펼쳐짐. 닫아도 값은 유지) ────────────────────
+ss = st.session_state
+vals = ss.setdefault("vals", {})
+
+
+def S(key, default):
+    """설정값: 화면에 슬라이더가 있으면 그 값, 없으면 마지막에 저장된 값"""
+    v = ss.get("s_" + key, vals.get(key, default))
+    vals[key] = v
+    return v
+
+
+def setting(key, label, lo, hi, default, step=1):
+    ss.setdefault("s_" + key, vals.get(key, default))
+    v = st.slider(label, lo, hi, step=step, key="s_" + key)
+    vals[key] = v
+    return v
+
+
+show_set = st.checkbox("⚙️ 설정 (갱신 주기 · 알림 · 소요시간)", key="show_set")
+if show_set:
+    refresh = setting("refresh", "자동 갱신 주기(초)", 20, 90, 40, 5)
+    alert_min = setting("alert", "승차 알림 기준(분 전)", 1, 10, 3)
+    ss.setdefault("s_any", vals.get("any", False))
+    anytime = st.checkbox(f"{WINDOW[0]}~{WINDOW[1]}시 외에도 자동 조회", key="s_any")
+    vals["any"] = anytime
+    edit_label = st.radio("소요시간을 고칠 경로", [r["short"] for r in ROUTES], horizontal=True, key="s_edit")
+    edit_idx = [r["short"] for r in ROUTES].index(edit_label)
+else:
+    refresh, alert_min, anytime = S("refresh", 40), S("alert", 3), S("any", False)
+    edit_idx = None
 
 cfg = []
-with st.sidebar:
-    st.header("소요시간 설정(분)")
-    for i, r in enumerate(ROUTES):
-        with st.expander(r["label"], expanded=False):
-            walk = st.number_input("1층 → 승차 정류장 도보", 0, 15, r["walk"], key=f"w{i}")
-            ride = st.number_input(f"{r['route']} 승차 → {r['off']} 하차 (실시간 없을 때 대체값)", 1, 60, r["ride"], key=f"r{i}")
-            walk_t = st.number_input(f"{r['off']} → {r['t_ars']} 도보(250m)", 0, 15, r["walk_t"], key=f"t{i}")
-            ride2 = st.number_input(f"{r['t_route']} 승차 → {r['dest']} 하차 (실시간 없을 때 대체값)", 1, 60, r["ride2"], key=f"x{i}")
-        cfg.append({**r, "walk": walk, "ride": ride, "walk_t": walk_t, "ride2": ride2})
+for i, r in enumerate(ROUTES):
+    if i == edit_idx:
+        walk = setting(f"{i}_walk", "1층 → 승차 정류장 도보(분)", 0, 15, r["walk"])
+        ride = setting(f"{i}_ride", f"{r['route']} 승차 → {r['off']} 하차(분) · 실시간 없을 때 값", 1, 60, r["ride"])
+        walk_t = setting(f"{i}_walk_t", f"{r['off']} → {r['t_ars']} 도보(분)", 0, 15, r["walk_t"])
+        ride2 = setting(f"{i}_ride2", f"{r['t_route']} 승차 → {r['dest']} 하차(분) · 실시간 없을 때 값", 1, 60, r["ride2"])
+    else:
+        walk, ride = S(f"{i}_walk", r["walk"]), S(f"{i}_ride", r["ride"])
+        walk_t, ride2 = S(f"{i}_walk_t", r["walk_t"]), S(f"{i}_ride2", r["ride2"])
+    cfg.append({**r, "walk": walk, "ride": ride, "walk_t": walk_t, "ride2": ride2})
 
 try:
     KEY = st.secrets["BUS_API_KEY"]
@@ -135,7 +168,7 @@ def short(sec):
 
 # ── 카카오맵 ─────────────────────────────────────────
 MAP_HTML = """
-<div id="wrap" style="position:relative;width:100%;height:400px;border-radius:14px;overflow:hidden">
+<div id="wrap" style="position:relative;width:100%;height:360px;border-radius:14px;overflow:hidden">
   <div id="m" style="position:absolute;left:0;top:0;right:0;bottom:0"></div>
   <svg id="ln" style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:5"></svg>
   <div id="lb" style="position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;z-index:6"></div>
@@ -169,8 +202,8 @@ if (typeof kakao === 'undefined' || !kakao.maps) {
       'box-shadow:0 2px 8px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;' +
       'font:700 16px sans-serif">' + p.no + '</div>'});
     const el = document.createElement('div');
-    el.style.cssText = 'position:absolute;left:0;top:0;background:#fff;color:#222;border-radius:10px;padding:6px 11px;' +
-      'border-left:6px solid ' + p.bc + ';box-shadow:0 2px 8px rgba(0,0,0,.35);font:13px/1.45 sans-serif;white-space:nowrap';
+    el.style.cssText = 'position:absolute;left:0;top:0;background:#fff;color:#222;border-radius:10px;padding:5px 9px;' +
+      'border-left:6px solid ' + p.bc + ';box-shadow:0 2px 8px rgba(0,0,0,.35);font:12px/1.4 sans-serif;white-space:nowrap';
     el.innerHTML = p.html;
     lb.appendChild(el);
     p.el = el;
@@ -246,9 +279,9 @@ def show_boarding_map(points, paths=None):
     page = (MAP_HTML.replace("%%KEY%%", KAKAO_JS_KEY).replace("%%ORANGE%%", ORANGE)
             .replace("%%PTS%%", json.dumps({"pts": points, "paths": paths or []}, ensure_ascii=False)))
     if hasattr(st, "iframe"):          # 최신 Streamlit
-        st.iframe(page, height=415)
+        st.iframe(page, height=375)
     else:                              # 구버전 호환
-        components.html(page, height=415)
+        components.html(page, height=375)
 
 
 # ── 카드 ─────────────────────────────────────────
@@ -258,16 +291,15 @@ def step(icon, text, right="", sub=""):
             f'<span class="rt">{right}</span></div>')
 
 
-STATUS = {"ok": ("🟢", "여유 있게 탈 수 있어요"),
-          "tight": ("🟠", "도보 시간보다 빨라요 · 뛰면 탈 수 있어요"),
-          "miss": ("⚪", "도보 시간보다 많이 빨라 타기 어려워요")}
+STATUS = {"ok": ("🟢", "탈 수 있어요"), "tight": ("🟠", "뛰면 가능"), "miss": ("⚪", "타기 어려워요")}
 
 
 def arrivals_block(arrs, walk_min):
     rows = []
     for a in arrs[:2]:
         ic, txt = STATUS[bus.status(a.eta_sec, walk_min * 60)]
-        rows.append(step(ic, f"<b>{mmss(a.eta_sec)}</b> 후 도착", "", txt + (" · 만차 표시" if a.full else "")))
+        rows.append(step(ic, f"<b>{mmss(a.eta_sec)}</b> 후",
+                         f'<span class="chipx">{txt}{" · 만차" if a.full else ""}</span>'))
     return "".join(rows) or step("⚠️", "도착 정보 없음")
 
 
@@ -381,7 +413,7 @@ def compute():
                 name_of=lambda ars: coords.get(ars, {}).get("name", f"정류장 {ars}"))
 
 
-MODES = ["자동 추천"] + [r["label"] for r in ROUTES]
+MODES = ["자동 추천"] + [r["short"] for r in ROUTES]
 
 
 def selected_idx():
@@ -501,8 +533,8 @@ def hero_frag():
     now, best, opts = v["now"], v["best"], v["opts"]
     hm = lambda sec: (now + timedelta(seconds=sec)).strftime("%H:%M")
     n_calls = api_counter()["n"]
-    st.caption(f"마지막 조회 {datetime.fromtimestamp(v['t'], KST):%H:%M:%S} ({int(v['el'])}초 전) · "
-               f"숫자는 1초마다 줄어들고 {refresh}초마다 새로 받아옵니다 · 오늘 API 호출 약 {n_calls}/1,000회")
+    st.caption(f"{datetime.fromtimestamp(v['t'], KST):%H:%M:%S} 조회 ({int(v['el'])}초 전) · "
+               f"{refresh}초마다 갱신 · API {n_calls}/1,000")
     if n_calls >= 900:
         st.warning("오늘 API 호출이 한도(1,000회)에 가까워요. 갱신 주기를 늘리거나 화면을 닫아 주세요.")
 
@@ -601,7 +633,7 @@ def others_frag():
     v = compute() if sel is not None else None
     if not v:
         return
-    with st.expander("다른 경로도 보기"):
+    if st.checkbox("다른 경로도 보기", key="show_others"):
         render_cards(v, [i for i in range(len(cfg)) if i != sel], None)
 
 
@@ -610,22 +642,21 @@ def raw_frag():
     v = compute()
     if not v:
         return
-    with st.expander("원본 도착정보"):
+    if st.checkbox("원본 도착정보 보기", key="show_raw"):
         for name in STOPS:
             rows = [{"노선": x.route, "남은시간": mmss(x.eta_sec), "메시지": x.msg,
                      "혼잡도": {"3": "여유", "4": "보통", "5": "혼잡"}.get(x.congestion, "-")}
                     for x in sorted(v["data"][name], key=lambda x: x.eta_sec)]
             st.write(f"**{name}** · {v['name_of'](name)}")
-            st.dataframe(rows, hide_index=True)
+            st.table(rows)
 
 
 if not is_active():
-    st.info(f"페이지를 열 때 한 번 조회했어요. 자동 갱신은 퇴근 시간대({WINDOW[0]}~{WINDOW[1]}시, 평일)에만 돼요. "
-            "최신 정보가 필요하면 아래 버튼을 누르거나 새로고침하세요.")
+    st.caption(f"열 때 한 번 조회했어요 · 자동 갱신은 평일 {WINDOW[0]}~{WINDOW[1]}시에만")
     if st.button("지금 다시 조회"):
         fetch_snapshot()
 
-st.radio("내 경로 선택 (고르면 그 경로만 보여줘요)", MODES, horizontal=True, key="mode")
+st.radio("내 경로 (고르면 그 경로만 보여줘요)", MODES, horizontal=True, key="mode")
 hero_frag()
 map_frag()
 st.markdown("&nbsp;", unsafe_allow_html=True)
